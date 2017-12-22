@@ -1,0 +1,60 @@
+/**
+	 * 解析可能会非常消耗时间和空间	
+	 * @author yWX427833
+	 * @since 2017年5月18日
+	 * @param message
+	 */
+	@Async
+	@Transactional(propagation=Propagation.NOT_SUPPORTED)
+	public void parse(Message message, long uid, String account, String lastAswerTime) {
+		logger.info("邮件解析开始");
+		MailParser parser = MailParser.build(downloadUrl);
+		String messageID = null;
+		String references = null;
+		BaseMail mail = null;
+		Date receivedDate = null;
+		try{ 
+			messageID = MailParser.messageID(message); //获取邮件的唯一标识符
+			long millis = System.currentTimeMillis();
+			logger.info("邮件 :"+messageID+"|解析开始时间点:" + new Date(millis) +"|时间戳: " + millis);
+			references = MailParser.references(message); //获取关联的其他邮件的唯一标识符
+			mail = parser.parse(message);
+			receivedDate = MailParser.getReceivedDate(message);
+		}catch(Exception e){
+			logger.error("邮件解析出错，ERROR", e);
+			logger.info("加入重新解析对列");
+			CacheManager.pushMessageIdQueue(ayncDownloadMessageKey+"_"+account, messageID + ":" + uid);
+			return ;
+		}
+		
+		try{
+			MailVO mailVO = new MailVO();
+			mailVO.setUid(messageID);
+			mailVO.setMail(mail);
+			mailVO.setReferences(references);
+			mailVO.setReceiveTime(receivedDate);
+			mailVO.setLastLimitTime(lastAswerTime);
+			Address[] addresses = message.getFrom();
+			String from = null;
+			if (addresses != null && addresses.length > 0) {
+				from = ((InternetAddress) addresses[0]).getAddress();
+			}
+			if(isNull(from) || from.contains("MicrosoftExchange")){
+				return ;
+			}
+			List<EmailConfig> configs = CacheManager.getEmailConfigs(configKey);
+			for(EmailConfig cfg : configs){
+				if(cfg.getEmail().equalsIgnoreCase(from)){
+					return ;
+				}
+			}
+			// 处理 SR单号流程开始
+			mailService.handle(mailVO);
+			/**
+			 * messageID 加入缓存 后续处理下载
+			 */
+			CacheManager.pushMessageIdQueue(ayncDownloadMessageKey, account+":"+messageID + ":" + uid);
+		} catch (Exception e) {
+			logger.error("邮件建单处理出错，ERROR", e);
+		}
+	}
