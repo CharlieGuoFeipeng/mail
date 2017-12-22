@@ -1,0 +1,124 @@
+package com.huawei.it.cic.email.jmail;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+
+import javax.activation.DataSource;
+
+
+/**
+ * @author 郭飞鹏
+ * @date 2017年4月12日 下午8:03:53
+ */
+public class BaseMail {
+	
+	private String subject;
+	private String content;
+	private String html;
+	private String from;
+	private Collection<String> toUsers = new ArrayList<String>();  //收件人
+	private Collection<String> ccUsers = new ArrayList<String>();  //抄送人
+	private Collection<String> bccUsers = new ArrayList<String>(); //密送人
+	private Collection<DataSource> attachs = new ArrayList<DataSource>(); //附件
+	private Collection<MailImage> imageBeans = new ArrayList<MailImage>();
+	
+	private String emlfile; // 解析后的邮件文件名 subject + .eml ; 上传到EDM 之后为文件的JSON格式信息， 
+	
+	private List<String> fileNames = new ArrayList<String>();
+	
+	private byte[] stream;
+	
+	public BaseMail() {
+		super();
+	}
+	
+	public String getSubject() {
+		return subject;
+	}
+	public void setSubject(String subject) {
+		this.subject = subject;
+	}
+	public String getContent() {
+		return content;
+	}
+	public void setContent(String content) {
+		this.content = content;
+	}
+	public Collection<String> getToUsers() {
+		return toUsers;
+	}
+	public void setToUsers(Collection<String> toUsers) {
+		this.toUsers = toUsers;
+	}
+	public Collection<String> getCcUsers() {
+		return ccUsers;
+	}
+	public void setCcUsers(Collection<String> ccUsers) {
+		this.ccUsers = ccUsers;
+	}
+	public Collection<String> getBccUsers() {
+		return bccUsers;
+	}
+	public void setBccUsers(Collection<String> bccUsers) {
+		this.bccUsers = bccUsers;
+	}
+
+	public Collection<DataSource> getAttachs() {
+		return attachs;
+	}
+
+	public void setAttachs(Collection<DataSource> attachs) {
+		this.attachs = attachs;
+	}
+
+	public String getHtml() {
+		return html;
+	}
+
+	public void setHtml(String html) {
+		this.html = html;
+	}
+	
+	public Collection<MailImage> getImageBeans() {
+		return imageBeans;
+	}
+
+	public void setImageBeans(Collection<MailImage> imageBeans) {
+		this.imageBeans = imageBeans;
+	}
+
+	public String getFrom() {
+		return from;
+	}
+
+	public void setFrom(String from) {
+		this.from = from;
+	}
+
+
+	public String getEmlfile() {
+		return emlfile;
+	}
+
+	public void setEmlfile(String emlfile) {
+		this.emlfile = emlfile;
+	}
+
+	public byte[] getStream() {
+		return stream;
+	}
+
+	public void setStream(byte[] stream) {
+		this.stream = stream;
+	}
+
+	public List<String> getFileNames() {
+		return fileNames;
+	}
+
+	public void setFileNames(List<String> fileNames) {
+		this.fileNames = fileNames;
+	}
+	
+}
