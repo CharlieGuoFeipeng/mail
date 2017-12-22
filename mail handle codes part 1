@@ -1,0 +1,76 @@
+public void handleMailMessage(EmailConfig config){
+		String dateS = CacheManager.getValidObj(PUSH_SYS_MSG_KEY, config.getEmail());
+		if(!isNull(dateS)){
+			String timeLong = CacheManager.getValidObj(PUSH_SYS_MSG_KEY, config.getEmail());
+			Date lastDate = new Date(Long.valueOf(timeLong));
+			if(DateUtils.before(new Date(), lastDate)){
+				return ;
+			}
+		}
+		String account = config.getUsername();
+		String email = config.getEmail();
+		try {
+			JavaMailReceiver receiver = MailReceiverBox.getStore(config.getUsername());
+			if(receiver == null){
+				logger.info("MailReceiverBox DONT have the receiver named :"+ account);
+				resetReceiverBox(account);
+				receiver = MailReceiverBox.getStore(config.getUsername());
+			}
+			String status = CacheManager.getValidObj(email, account+"_"+STATUS);
+			if(!isNull(status) && status.equals(ON_READING)){
+//				logger.info("邮箱："+account+"正在获取新邮件...");
+				return ;
+			}
+//			logger.info("邮箱："+account+"开始获取新邮件");
+			CacheManager.setValidObj(email, account+"_"+STATUS, ON_READING);
+			
+			long last = CacheManager.getMailLastUID(emailKey, account);
+			if(last==-1){
+				int total = receiver.getMailCount();
+				total = total < 1 ? 1 : total;
+				Message lastMail = receiver.receiveLastMail(total);
+				last = MailParser.UID(lastMail);
+				CacheManager.setMailLastUID(emailKey, account, last);
+				CacheManager.setValidObj(email, account+"_"+STATUS, OFF_READING);
+				return ;
+			}
+			List<Message> mails = receiver.receiveUreadMails(last);
+			if(mails.size()==0){
+				CacheManager.setValidObj(email, account+"_"+STATUS, OFF_READING);
+				return ;
+			}
+			logger.info("邮箱："+account+"获取新邮件的UID节点："+ last + "新邮件数量:"+mails.size());
+			for(Message message : mails){
+				long uid = MailParser.UID(message);
+				long lastCount = CacheManager.getMailLastUID(emailKey, account);
+				if(uid > lastCount){
+					CacheManager.setMailLastUID(emailKey, account, uid);
+					logger.info("邮箱："+account+"跟新获取新邮件后 UID节点： "+ uid);
+					mailTasker.parse(message, uid, account, config.getTime());
+				}
+			}
+			logger.info("邮箱："+account+"获取新邮件结束");
+		} catch (Exception e) {
+			logger.error("获取邮件发生异常", e);
+			resetReceiverBox(account);
+		} finally {
+			CacheManager.setValidObj(email, account+"_"+STATUS, OFF_READING);
+		}
+	}
+	
+	
+	
+	void resetReceiverBox(String account){
+		logger.info("reset the receiver into MailReceiverBox beginning");
+		EmailConfig cfg = CacheManager.getEmailConfig(configKey, account);
+		Properties prop = new Properties();
+		prop.setProperty("mail.imap.host", cfg.getImaphost());
+		prop.setProperty("mail.store.protocol", "imap");
+		prop.setProperty("mail.imap.timeout", "300000"); //socket I/O timeout milliseconds
+		prop.setProperty("mail.imap.connectiontimeout", "30000");//连接超时设置 单位毫秒
+		prop.setProperty("mail.imap.partialfetch","true");
+		prop.setProperty("mail.imap.fetchsize", 4*1024*1024+""); // 4M
+		JavaMailReceiver receiver = JavaMailReceiver.build(prop, cfg.getUsername(), cfg.getPassword());
+		reConnect(receiver, cfg.getEmail(), 0);
+		MailReceiverBox.setStore(cfg.getUsername(), receiver);
+	}
