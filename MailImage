@@ -1,0 +1,32 @@
+package com.huawei.it.cic.email.jmail;
+
+public class MailImage {
+	private String cid;
+	private String imgfile;
+	private byte[] fileData;
+	
+	public MailImage() {
+	}
+	
+	public String getCid() {
+		return cid;
+	}
+	public void setCid(String cid) {
+		this.cid = cid;
+	}
+	public String getImgfile() {
+		return imgfile;
+	}
+	public void setImgfile(String imgfile) {
+		this.imgfile = imgfile;
+	}
+
+	public byte[] getFileData() {
+		return fileData;
+	}
+
+	public void setFileData(byte[] fileData) {
+		this.fileData = fileData;
+	}
+	
+}
