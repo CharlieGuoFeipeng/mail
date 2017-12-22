@@ -1,0 +1,241 @@
+package com.huawei.it.cic.email.jmail;
+
+import static com.huawei.it.cic.email.utils.Utils.isEmpty;
+import static com.huawei.it.cic.email.utils.Utils.isNull;
+
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.List;
+import java.util.Properties;
+
+import javax.activation.DataHandler;
+import javax.activation.DataSource;
+import javax.mail.Authenticator;
+import javax.mail.Message;
+import javax.mail.MessagingException;
+import javax.mail.NoSuchProviderException;
+import javax.mail.PasswordAuthentication;
+import javax.mail.Session;
+import javax.mail.Transport;
+import javax.mail.event.TransportAdapter;
+import javax.mail.event.TransportEvent;
+import javax.mail.event.TransportListener;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeBodyPart;
+import javax.mail.internet.MimeMessage;
+import javax.mail.internet.MimeMultipart;
+import javax.mail.internet.MimePart;
+import javax.mail.util.ByteArrayDataSource;
+
+
+public class JavaMailSender {
+	
+	private String mailServerHost;
+	private String mailUser;
+	private String mailPassword;
+	
+	private Session session;
+	private Transport transport;
+
+	private JavaMailSender(String mailServerHost, String mailUser,
+			String mailPassword) {
+		this.mailServerHost = mailServerHost;
+		this.mailUser = mailUser;
+		this.mailPassword = mailPassword;
+	}
+
+	public static JavaMailSender getInstance(String host, String user,
+			String password){
+		System.setProperty("java.net.preferIPv4Stack", "true");
+		JavaMailSender sender = new JavaMailSender(host, user, password);
+		sender.createDefaultSession();
+		return sender;
+	}
+	
+	public void builTransport(TransportListener listener) throws NoSuchProviderException{
+		transport = session.getTransport("smtp");
+		if(listener != null ){
+			transport.addTransportListener(listener);
+		}
+	}
+	
+	private void createDefaultSession() {
+		Properties props = new Properties();
+		props.setProperty("mail.transport.protocol", "smtp");
+//		props.setProperty("mail.smtp.host", mailServerHost);
+		session = Session.getInstance(props, new Authenticator() {
+			@Override
+			protected PasswordAuthentication getPasswordAuthentication() {
+				return new PasswordAuthentication(mailUser, mailPassword);
+			}
+		});
+		session.setDebug(true);
+	}
+
+	/**
+	 * 发送邮件
+	 * @param mail
+	 * @return messageid
+	 * @throws MessagingException
+	 */
+	public String send(BaseMail mail) throws MessagingException{
+		checkTransportConnection();
+		Message message = createMimeMessage(mail);
+		send(message);
+		return ((MimeMessage)message).getMessageID();
+	}
+	
+	/**
+	 * 回复
+	 * @param mail
+	 * @param references
+	 * @return messageID
+	 * @throws MessagingException
+	 */
+	public MimeMessage reply(BaseMail mail, String references) throws MessagingException{
+		checkTransportConnection(new TransportAdapter() {
+			@Override
+			public void messageNotDelivered(TransportEvent e) {
+			}
+			
+			@Override
+			public void messageDelivered(TransportEvent e) {
+			}
+		});
+		
+		Message message = createMimeMessage(mail);
+		if(!isNull(references)){
+			if(!references.startsWith("<")){
+				references = "<"+references;
+			}
+			if(!references.endsWith(">")){
+				references = references+">";
+			}
+			message.setHeader("In-Reply-To", references);
+			message.setHeader("References", references);
+		}
+		send(message);
+		return (MimeMessage)message;
+	}
+	
+	/**
+	 * 转发处理
+	 * @param mail
+	 * @throws MessagingException 
+	 * @throws IOException 
+	 */
+	public void forward(BaseMail mail,BaseMail forwardMail) throws MessagingException, IOException{
+		checkTransportConnection();
+		
+		forwardMail.setSubject("FW: " + mail.getSubject());
+		Message fwMessage = createMimeMessage(forwardMail);
+		MimeMultipart fwMultiPart = (MimeMultipart) fwMessage.getContent();
+		
+		MimeBodyPart bodyPart = new MimeBodyPart();
+		Message message = createMimeMessage(mail);
+		bodyPart.setContent(message, "message/rfc822");
+		fwMultiPart.addBodyPart(bodyPart);
+		
+		fwMessage.setContent(fwMultiPart);
+		fwMessage.saveChanges();
+		send(fwMessage);
+	}
+	
+	
+	protected void checkTransportConnection() throws MessagingException{
+		checkTransportConnection(null);
+	}
+	
+	protected void checkTransportConnection(TransportListener listener) throws MessagingException{
+		if(transport == null){
+			builTransport(listener);
+		}
+		if( !transport.isConnected()){
+			transport.connect(mailServerHost, mailUser, mailPassword);
+		}
+	}
+	
+	private Message createMimeMessage(BaseMail mail) throws MessagingException{
+		MimeMessage message = new MimeMessage(session);
+		message.setSubject(mail.getSubject(), "UTF-8");
+		message.setFrom(mail.getFrom());
+		for(String to : mail.getToUsers()){
+			message.addRecipient(Message.RecipientType.TO, new InternetAddress(to));
+		}
+		for(String cc : mail.getCcUsers()){
+			message.addRecipient(Message.RecipientType.CC, new InternetAddress(cc));
+		}
+		for(String bcc : mail.getBccUsers()){
+			message.addRecipient(Message.RecipientType.BCC, new InternetAddress(bcc));
+		}
+		
+		
+		/**
+		 * 添加附件
+		 */
+		List<MimeBodyPart> attcs = getAttacs(mail.getAttachs());
+		MimeMultipart multipart = new MimeMultipart();
+		for(MimeBodyPart attc : attcs){
+			multipart.addBodyPart(attc);
+		}
+		
+		/**
+		 * 封装图文HTML内容, 没有则为纯文本
+		 */
+		MimeBodyPart content = new MimeBodyPart();
+		MimeMultipart htmlContent = new MimeMultipart();
+		htmlContent.setSubType("related");
+		if(!isNull(mail.getHtml())){
+			MimeBodyPart htmlBody = new MimeBodyPart(); 
+			htmlBody.setContent(mail.getHtml(), "text/html;charset=utf-8");
+			htmlContent.addBodyPart(htmlBody);
+		}
+		if(!isNull(mail.getContent())){
+			MimeBodyPart textBody = new MimeBodyPart(); 
+			textBody.setContent(mail.getContent(), "text/plain;charset=utf-8");
+			htmlContent.addBodyPart(textBody);
+		}
+		if(!isEmpty(mail.getImageBeans())){
+				for(MailImage mi : mail.getImageBeans()){
+					MimeBodyPart imgbody = new MimeBodyPart();
+					imgbody.setContentID(mi.getCid());
+					imgbody.setDisposition(MimePart.INLINE);
+					imgbody.setFileName(mi.getImgfile());
+					DataSource dataSource = new ByteArrayDataSource(mi.getFileData(),"image/*");
+					imgbody.setDataHandler(new DataHandler(dataSource));	
+					htmlContent.addBodyPart(imgbody);
+				}
+		}
+		content.setContent(htmlContent);
+		multipart.addBodyPart(content);
+		
+		message.setContent(multipart);
+		return message;
+	}
+	
+	private List<MimeBodyPart> getAttacs(Collection<DataSource> dss) throws MessagingException{
+		List<MimeBodyPart> attachments =  new ArrayList<MimeBodyPart>();
+		for(DataSource ds : dss){
+			MimeBodyPart part = new MimeBodyPart();
+			part.setDataHandler(new DataHandler(ds));
+			String name = ds.getName();
+			part.setFileName(isNull(name)? "":name);
+			attachments.add(part);
+		}
+		return attachments;
+	}
+	
+	
+	private void send(Message message) throws MessagingException{
+		if(!isEmpty(message.getRecipients(Message.RecipientType.TO))){
+			transport.sendMessage(message, message.getRecipients(Message.RecipientType.TO));
+		}if(!isEmpty(message.getRecipients(Message.RecipientType.CC))){
+			transport.sendMessage(message, message.getRecipients(Message.RecipientType.CC));
+		}if(!isEmpty(message.getRecipients(Message.RecipientType.BCC))){
+			transport.sendMessage(message, message.getRecipients(Message.RecipientType.BCC));
+		}
+		transport.close();
+	}
+	
+}
