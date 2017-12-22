@@ -1,0 +1,376 @@
+package com.huawei.it.cic.email.jmail;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Properties;
+
+import javax.mail.Authenticator;
+import javax.mail.Flags;
+import javax.mail.Folder;
+import javax.mail.FolderClosedException;
+import javax.mail.Message;
+import javax.mail.MessagingException;
+import javax.mail.NoSuchProviderException;
+import javax.mail.PasswordAuthentication;
+import javax.mail.Session;
+import javax.mail.Store;
+import javax.mail.URLName;
+import javax.mail.event.ConnectionAdapter;
+import javax.mail.event.ConnectionEvent;
+import javax.mail.search.MessageIDTerm;
+
+import com.huawei.it.jalor5.core.log.ILogger;
+import com.huawei.it.jalor5.core.log.JalorLoggerFactory;
+import com.sun.mail.imap.IMAPFolder;
+
+/**
+ * @author 郭飞鹏
+ * @date 2017年4月13日 上午11:20:18
+ * 邮件接收类
+ */
+public class JavaMailReceiver {
+	
+	private final static ILogger logger = JalorLoggerFactory.getLogger(JavaMailReceiver.class);
+	
+	private String mailServerHost;
+	private String mailUser;
+	private String mailPassword;
+	
+	private Session session;
+	
+	private Store store;
+	
+	private Folder folder;
+	
+	public static final int WR = Folder.READ_WRITE;
+	
+	public static final int R = Folder.READ_ONLY;
+	
+	private int mode = R;
+	
+	JavaMailReceiver() {}
+	
+	JavaMailReceiver(String mailServerHost, String mailUser,
+			String mailPassword) {
+		this.mailServerHost = mailServerHost;
+		this.mailUser = mailUser;
+		this.mailPassword = mailPassword;
+	}
+	
+	private void buildSession(Properties prop) {
+		this.session = Session.getInstance(prop);
+		this.session.setDebug(false);
+	}
+
+	private void buildAuthSession(Properties prop, final String user, final String password) 
+			throws NoSuchProviderException{
+		session = Session.getInstance(prop, new Authenticator() {
+			@Override
+			protected PasswordAuthentication getPasswordAuthentication() {
+				return new PasswordAuthentication(user, password);
+			}
+		});
+		this.session.setDebug(false);
+	}
+	
+	private void buildStore() throws MessagingException{
+		if(session==null){
+			throw new RuntimeException("the session is null");
+		}
+		store = session.getStore();
+		addReConnListener();
+	}
+	
+	private void buildStore(String protocol) throws MessagingException{
+		if(session==null){
+			throw new RuntimeException("the session is null");
+		}
+		store = session.getStore(protocol);
+		addReConnListener();
+	}
+	
+	private void buildStore(String protocol,int port, String file) throws MessagingException{
+		if(session==null){
+			throw new RuntimeException("the session is null");
+		}
+		store = session.getStore(new URLName(protocol, mailServerHost, port, file, mailUser, mailPassword));
+		addReConnListener();
+	}
+	
+	protected void addReConnListener(){
+		if(store == null){
+			logger.error("the store is null");
+		}
+		store.addConnectionListener(new ConnectionAdapter() {
+			@Override
+			public void disconnected(ConnectionEvent e) {
+					try {
+						store.connect();
+					} catch (MessagingException e1) {
+					}
+			}
+		});
+	}
+	
+	public void connect() throws MessagingException{
+		
+		if(store.isConnected()){
+			store.close();
+			store.connect();
+		}else{
+			store.connect();
+		}
+		
+		folder = store.getFolder("INBOX");
+//		folder.addConnectionListener(new ConnectionAdapter() {
+//			@Override
+//			public void closed(ConnectionEvent e) {
+//				try {
+//					folder.open(mode);
+//				} catch (MessagingException e1) {
+//				}
+//			}
+//		});
+		folder.open(mode);
+	}
+	
+	public boolean isConnected(){
+		return store.isConnected();
+	}
+	
+	public void close(){
+		try {
+			store.close();
+		} catch (MessagingException e) {
+		}
+	}
+	
+	public static JavaMailReceiver build(Properties prop, String user, String password){
+		JavaMailReceiver receiver = new JavaMailReceiver();
+		try {
+			receiver.buildAuthSession(prop, user, password);
+			receiver.buildStore();
+			receiver.connect();
+		} catch (MessagingException e) {
+			logger.error("连接到邮箱服务器失败", e);
+		}
+		return receiver;
+	}
+	
+	public static JavaMailReceiver build(Properties prop, String user, String password, 
+			String protocol){
+		JavaMailReceiver receiver = new JavaMailReceiver();
+		try{
+			receiver.buildAuthSession(prop, user, password);
+			receiver.buildStore(protocol);
+			receiver.connect();
+		} catch (MessagingException e) {
+			logger.error("连接到邮箱服务器失败", e);
+		}
+		return receiver;
+	}
+	
+	public static JavaMailReceiver build(Properties prop, String host, String user, String password, 
+			String protocol){
+		return build(prop,host,user, password, protocol, -1);
+	}
+	
+	public static JavaMailReceiver build(Properties prop, String host, String user, String password, 
+			String protocol, int port) {
+		JavaMailReceiver receiver = new JavaMailReceiver(host, user, password);
+		try{
+			receiver.buildSession(prop);
+			receiver.buildStore(protocol, port, null);
+			receiver.connect();
+		} catch (MessagingException e) {
+			logger.error("连接到邮箱服务器失败", e);
+		}
+		return receiver;
+	}
+	
+	void checkFolder() throws MessagingException{
+		if(folder == null){
+			connect();	
+		}
+		try{
+			if(!folder.isOpen()){
+				folder.open(mode);
+			}else{
+				folder.close(false);
+				folder.open(mode);
+			}
+		}catch (Exception e) {
+			if(e instanceof FolderClosedException){
+				folder.open(mode);
+			}if(e instanceof IllegalStateException){
+				// connect it once again
+				connect();
+			}
+		}
+	}
+	
+	/**
+	 * 获取所有邮件数量
+	 * @return
+	 * @throws MessagingException 
+	 */
+	public Integer getMailCount() throws MessagingException{
+		checkFolder();
+		return folder.getMessageCount();
+	}
+	
+	/**
+	 * 获取邮件
+	 * @param start 从一开始
+	 * @param limit 获取多少封
+	 * @return
+	 * @throws MessagingException
+	 */
+	public List<Message> receiveMails(Integer start, Integer limit) throws MessagingException{
+		return receivMails(start, start+limit-1);
+	}
+	
+	public List<Message> receivMails(int start, int end) throws MessagingException{
+		start ++;
+		checkFolder();
+		
+		int messageCount = folder.getMessageCount();
+		List<Message> msgs = new ArrayList<Message>();
+		if(messageCount <= 0){
+			return msgs;
+		}
+		Message[] messages = null;
+		if(end < messageCount){
+			messages = folder.getMessages(start, end);
+		}else{
+			messages = folder.getMessages(start, messageCount);
+		}
+		for(Message msg : messages){
+			if(mode == WR){
+				msg.setFlag(Flags.Flag.SEEN, true);
+			}
+			msgs.add(msg);
+		}
+		return msgs;
+	}
+	
+	public Message receiveLastMail(int last) throws MessagingException{
+		checkFolder();
+		
+		Message message = folder.getMessage(last);
+		if(mode == WR){
+			message.setFlag(Flags.Flag.SEEN, true);
+		}
+		return message;
+	}
+	
+	/**
+	 * 获取全部邮件 这个方法需要谨慎使用，因为对性能花费非常昂贵
+	 * @return
+	 * @throws MessagingException
+	 */
+	public List<Message> receiveAllMails() throws MessagingException{
+		checkFolder();
+		int messageCount = folder.getMessageCount();
+		if(messageCount <= 0){
+			return new ArrayList<Message>();
+		}
+		return Arrays.asList(folder.getMessages());
+	}
+	
+	/**
+	 * 获取未读的邮件<br/>
+	 * 	这个读取未读邮件的非常耗时
+	 * @return
+	 * @throws MessagingException
+	 */
+	public List<Message> receiveUreadMails(Long UID) throws MessagingException{
+		checkFolder();
+		List<Message> msgList = new ArrayList<Message>();
+		UIDTerm term = new UIDTerm(UID);
+		int count = folder.getMessageCount();
+		if(count <= 0){
+			return msgList;
+		}
+		int begin = 1;
+		for(; count >= begin; count--){
+			Message message = folder.getMessage(count);
+			if(term.match(message)){
+				msgList.add(message);
+			}else{
+				break;
+			}
+		}
+		Collections.reverse(msgList);
+		return msgList;
+	}
+	
+	/**
+	 * 搜索邮箱内某些邮件，是否在获取邮件时设置为已读
+	 * @param mailUid
+	 * @param seen true 设置为已读 ； false 设置为未读
+	 * @return
+	 * @throws MessagingException
+	 */
+	public List<Message> search(String mailUid, boolean seen) throws MessagingException{
+		if(!isConnected()){
+			store.connect();
+		}
+		mailUid = formatMessageID(mailUid);
+		Message[] messages=null;
+		List<Message> msgList = new ArrayList<Message>(); 
+		
+		MessageIDTerm messageIDTerm = new MessageIDTerm(mailUid);
+		if(seen){
+			Folder folder = store.getFolder("INBOX");
+			folder.open(WR);
+			messages = folder.search(messageIDTerm);
+		}else{
+			checkFolder();
+			messages = this.folder.search(messageIDTerm);
+		}
+		if(messages == null){
+			return new ArrayList<Message>();
+		}
+		 
+		for(Message msg : messages){
+			if(seen){
+				msg.setFlag(Flags.Flag.SEEN, seen);
+			}
+			if(messageIDTerm.match(msg)){
+				msgList.add(msg);
+			}
+		}
+		return msgList;
+	}
+	
+	public Message search(long uid) throws MessagingException{
+		checkFolder();
+		Message message = ((IMAPFolder)this.folder).getMessageByUID(uid);
+		return message;
+	}
+	
+	String formatMessageID(String mID){
+		boolean formatted = mID.startsWith("<") && mID.endsWith(">");
+		return formatted ? mID : "<"+mID+">";
+	}
+
+	int getMode() {
+		return mode;
+	}
+	
+	/**
+	 * 如果重新设置mode，会根据新的mode重新连接 
+	 * @param mode JavaMailReceiver.WR | JavaMailReceiver.R 
+	 * @throws MessagingException
+	 */
+	public void setMode(int mode) throws MessagingException {
+		if(this.mode != mode){
+			this.mode = mode;
+			folder.close(true);
+		}
+	}
+	
+}
