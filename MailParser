@@ -1,0 +1,250 @@
+package com.huawei.it.cic.email.parser;
+
+import static com.huawei.it.cic.email.utils.Utils.isNull;
+
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Date;
+import java.util.List;
+
+import javax.activation.DataSource;
+import javax.mail.Address;
+import javax.mail.Message;
+import javax.mail.MessagingException;
+import javax.mail.internet.MimeMessage;
+
+import org.apache.commons.mail.util.MimeMessageParser;
+import org.jsoup.Jsoup;
+import org.jsoup.nodes.Document;
+import org.jsoup.nodes.Element;
+import org.jsoup.select.Elements;
+
+import com.huawei.it.cic.email.jmail.BaseMail;
+import com.huawei.it.cic.email.jmail.MailImage;
+import com.huawei.it.cic.email.service.impl.EdocService;
+import com.huawei.it.cic.email.utils.Utils;
+import com.huawei.it.edm.client.storm.exception.EdmException;
+import com.sun.mail.imap.IMAPFolder;
+
+public class MailParser {
+	
+	private  String ROOT_FILE_PATH = "/";
+	
+	private static final String EML = ".eml";
+	
+	MailParser(String path) {
+		if(path == null || path.length() == 0 ){
+			ROOT_FILE_PATH = System.getProperty("usr.dir");
+		}
+		if(path.endsWith("/")){
+			ROOT_FILE_PATH = path;
+		}else{
+			ROOT_FILE_PATH = path +"/";
+		}
+	}
+	
+	public static long UID(Message msg) throws MessagingException{
+		return ((IMAPFolder)msg.getFolder()).getUID(msg);
+	}
+	
+	public static String messageID(Message msg) throws MessagingException{
+		String messageID = ((MimeMessage)msg).getMessageID();
+		return messageID.replace("<", "").replace(">", "");
+	}
+	
+	public static Date getReceivedDate(Message msg) throws MessagingException{
+		Date date = ((MimeMessage)msg).getReceivedDate();
+		if(date == null){
+			date = new Date();
+		}
+		return date;
+	}
+	
+	/**
+	 * 原分割符为 "\r\n", 现在修改为","
+	 * @author yWX427833
+	 * @since 2017年5月18日
+	 * @param msg
+	 * @return
+	 * @throws MessagingException
+	 */
+	public static String references(Message msg) throws MessagingException{
+		String references = ((MimeMessage)msg).getHeader("References", null);
+		if(isNull(references)){
+			return null;
+		}
+		return references.replace("\r\n", ",").replace("<", "").replace(">", ""); 
+	}
+
+	/**
+	 * 讲邮件信息解析，保存相关图片和附件等文件到指定路径下	
+	 * @author yWX427833
+	 * @since 2017年5月19日
+	 * @param msg
+	 * @return
+	 * @throws Exception
+	 */
+	public BaseMail parse(Message msg) throws Exception {
+//		ROOT_FILE_PATH += messageID(msg).replace("<", "").replace(">", "")+File.separator;
+		synchronized (msg) {
+			JMailMessageParser parser = new JMailMessageParser((MimeMessage)msg).parse();
+			//发件人邮箱地址
+			 String from = parser.getFrom();
+			//收件人邮件地址
+			List<Address> to = parser.getTo();
+			//抄送人邮件地址
+			List<Address> cc = parser.getCc();
+			//密送人邮件地址
+			List<Address> bcc = parser.getBcc();
+			//邮件主题
+			String subject = parser.getSubject();
+			// 邮件的html 
+			HtmlImg html = parseImageHtml(parser);
+			// 邮件的 文字内容
+			String plain = parser.getPlainContent();
+			
+			//邮件附件数据流
+			List<DataSource> attchList = parser.getAttachmentList();
+			
+			BaseMail mail = new BaseMail();
+			mail.setSubject(subject);
+			mail.setImageBeans(html.getImgs());
+			mail.setBccUsers(transAddrs2Strs(bcc));
+			mail.setCcUsers(transAddrs2Strs(cc));
+			mail.setToUsers(transAddrs2Strs(to));
+			mail.setFrom(from);
+			mail.setContent(plain);
+			mail.setHtml(html.getHtml());
+			mail.setAttachs(attchList);
+			mail.setFileNames(parser.getFileNames());
+			
+			String attachment = /*ROOT_FILE_PATH + */subject + EML;
+			mail.setEmlfile(attachment);
+			return mail;
+		}
+	}
+	
+	List<String> transAddrs2Strs(Collection<Address> addrs){
+		List<String> list = new ArrayList<String>();
+		for(Address addr : addrs){
+			list.add(addr.toString());
+		}
+		return list;
+	}
+	
+	/**
+	 * 下载附件到本地，并返回文件路径	
+	 * @author yWX427833
+	 * @since 2017年5月18日
+	 * @param attchList
+	 * @return
+	 * @throws FileNotFoundException
+	 * @throws IOException
+	 * @throws EdmException
+	 */
+	List<String> trans2String(List<DataSource> attchList) 
+			throws FileNotFoundException, IOException, EdmException{
+		List<String> list = new ArrayList<String>();
+		for(DataSource ds : attchList){
+			String filepath = ROOT_FILE_PATH+ds.getName();
+			Utils.copyInputStream2File(ds.getInputStream(), new File(filepath));
+//			FileUtils.copyInputStreamToFile(ds.getInputStream(), new File(filepath));
+//			String remotefileUrl = Edoc.uploadFile(ROOT_FILE_PATH+ds.getName(), false);
+			list.add(filepath);
+		}
+		return list;
+	}
+	
+	public List<DataSource> loadAttachmentFileSource(Message msg) throws Exception{
+		MimeMessageParser parser = new MimeMessageParser((MimeMessage)msg).parse();
+		List<DataSource> attchList = parser.getAttachmentList();
+		return attchList;
+	}
+	
+	
+	HtmlImg parseImageHtml(JMailMessageParser parser) throws FileNotFoundException, IOException, EdmException{
+		String htmltext = parser.getHtmlContent();
+		if(isNull(htmltext)){
+			return new HtmlImg();
+		}
+		Document doc = Jsoup.parse(htmltext);
+		Elements imgs = doc.select("img");
+		List<MailImage> mailImgs = new ArrayList<MailImage>();
+		for(Element img : imgs){
+			String src = img.attr("src");
+			if(isNull(src)){
+				continue;
+			}
+			if(src.contains("cid:")){
+				String cid = src.substring(src.indexOf(":")+1);
+				DataSource imgDS = parser.findAttachmentByCid(cid);
+				if(imgDS==null){
+					continue;
+				}
+				String filename = imgDS.getName();
+				if(isNull(filename)){
+					continue;
+				}
+				String fileType = filename.substring(filename.lastIndexOf(".")+1);
+				String docID = EdocService.uploadFile(imgDS.getInputStream(), filename , fileType);
+				img.attr("src", ROOT_FILE_PATH + docID);
+				img.attr("cid", docID);
+				// 封装到mailimage 
+				MailImage mailImage = new MailImage();
+				mailImage.setCid(docID);
+				mailImage.setImgfile(filename);
+				mailImgs.add(mailImage);
+				continue;
+			}
+//			if(!src.contains("base64,")){
+//				String filename = src.substring(src.lastIndexOf("/")+1);
+//				String localFile = ROOT_FILE_PATH + filename;
+//				File file = new File(localFile);
+//				Utils.copyURLToFile(src, file);
+//				img.attr("src", localFile);
+//			}
+		}
+		HtmlImg htmlImg = HtmlImg.build();
+		htmlImg.setHtml(doc.toString());
+		htmlImg.setImgs(mailImgs);
+		return htmlImg;
+	}
+	
+	public synchronized static MailParser build(String realPath){
+		MailParser mailParser = new MailParser(realPath);
+		return mailParser;
+	}  
+	
+	
+	static class HtmlImg {
+		private String html;
+		private List<MailImage> imgs = new ArrayList<MailImage>();
+
+		public HtmlImg() {
+			super();
+		}
+
+		public String getHtml() {
+			return html;
+		}
+
+		public void setHtml(String html) {
+			this.html = html;
+		}
+		
+		public List<MailImage> getImgs() {
+			return imgs;
+		}
+
+		public void setImgs(List<MailImage> imgs) {
+			this.imgs = imgs;
+		}
+
+		public static HtmlImg build(){
+			return new HtmlImg(); 
+		}
+	}
+}
