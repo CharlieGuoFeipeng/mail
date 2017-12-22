@@ -1,0 +1,37 @@
+package com.huawei.it.cic.email.jmail;
+import javax.mail.Message;
+import javax.mail.search.SearchTerm;
+
+import com.sun.mail.imap.IMAPFolder;
+
+@SuppressWarnings("serial")
+public final class UIDTerm extends SearchTerm{
+
+		private long uid;
+
+		public UIDTerm(long uid) {
+				this.uid = uid;
+		}
+		
+		public long getUid() {
+			return uid;
+		}
+
+
+		@Override
+		public boolean match(Message msg) {
+			long uid = 0;
+
+			try {
+				uid = ((IMAPFolder)msg.getFolder()).getUID(msg);
+			} catch (Exception e) {
+			    return false;
+			}
+
+			if (uid == 0)
+			    return false;
+
+			return uid > this.uid;
+	   }
+		
+}
